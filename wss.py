@@ -13,13 +13,13 @@ class Game:
     solutions. 
     """
     words = []                      # List of all valid guesses
-    soln_words = []                 # List of guesses that can win
+    soln_words = []                 # List of guesses that can be solutions
     with open("all.txt", "r") as f:
         for word in f:
-            words.append(word[:5])
+            words.append(word[:5])          # Strip the newlines
     with open("actual.txt", "r") as f:
         for word in f:
-            soln_words.append(word[:5])
+            soln_words.append(word[:5])     # Strip the newlines
     
     def __init__(self, soln=None):
         """Initializes a game by choosing a solution word and creating a list to
@@ -30,7 +30,8 @@ class Game:
         self.rounds = []
 
     def isOver(self):
-        """If the game has played 6 rounds it's over
+        """If the game has played 6 rounds it's over. It's also over if the game
+        has already been won.
         """
         return len(self.rounds) == 6 or self.isWon()
 
@@ -60,6 +61,10 @@ class Game:
             solution, but in the wrong position
           - 'G' Means the corresponding character in the guess is in the 
             solution in that position
+
+        It's possible (esp. with an impatient human) that the words played are 
+        not valid guesses. In that case, the feedback is null and the Player is
+        expected to process that and try again. 
         """
         if self.checkWordIsLegal(word) and not self.isOver():
             return self.matchWord(word)
@@ -117,15 +122,16 @@ class HumanPlayer:
         """Initializes a player with a reference to the game they're playing.
         """
         self.game = game
-        self.butIWonTho = False
+        #self.butIWonTho = False    # This was for debugging why the game wasn't 
+                                    # ending when choosing random words from the
+                                    # source list (I forgot to remove '\n's)
 
     def playWord(self):
         """Prompts the player to enter a word through to console and returns 
         that word. Doesn't check validity of the word, that's the Game object's
         job"""
-        if self.butIWonTho:
-            holUp = True
-
+        #if self.butIWonTho:
+        #    holUp = True       # Null statement I can throw a breakpoint on
         prompt = "Enter a word for round " + str(len(self.game.rounds)+1) + ": "
         return input(prompt)
 
@@ -134,9 +140,9 @@ class HumanPlayer:
         should be directly under the word they input (if they're playing like a
         civilized person and not trying to mess with my program).
         """
-        print("              " + feedback + "\n")
-        if feedback == "GGGGG":
-            self.butIWonTho = True
+        print("                          " + feedback + "\n")
+        #if feedback == "GGGGG":    # Checking for wins is done in the game loop
+        #    self.butIWonTho = True # but I needed to debug it here. 
 
     def __str__(self):
         return "Human Player"
@@ -165,6 +171,8 @@ class AutoPlayer_MkI:
 class AutoPlayer_MkII:
     """Player control logic for a computer that uses the feedback to narrow down
     its random guesses. 
+    Currently set up to only play the game it's given on instantiation; for 
+    later incarnations/simulations I'll need to implement a reset() function.
     """
     def __init__(self, game):
         """Initialization is used to make a local copy of the game's complete
@@ -172,35 +180,45 @@ class AutoPlayer_MkII:
         """
         self.game = game
         self.possibilities = self.game.words.copy()
-        self.solvedLetters = [".", ".", ".", ".", "."]  # Placeholders
-        self.includedLetters = []   # What they say on the tin; for tracking
-        self.excludedLetters = []   # What they say on the tin; for tracking
+
+        # Set up the knowledge base of letters in the final answer that we're 
+        # certain about the position of, letters in the answer we're uncertain
+        # of the position of, and letters we're certain aren't in the answer
+        self.solvedLetters = [".", ".", ".", ".", "."]  # Sentinels to hold posn
+        self.includedLetters = []   
+        self.excludedLetters = []   
 
     def playWord(self):
         """Grabs a random word from its local list of remaining possible words.
+        Inelligible words are excluded in the feedback step after each round. 
         """
         self.choice = random.choice(self.possibilities)
+        # Formatting for the console with nasty string concatenation
         log(str(self) + ": I've narrowed it down to " + 
-              str(len(self.possibilities)) + " words..." + " " * (5-len(str(len(self.possibilities)))) + " '" + self.choice + "'?")
+            str(len(self.possibilities)) + " words..." + " " * 
+            (5-len(str(len(self.possibilities)))) + " '" + self.choice + "'?")
         return self.choice
 
     def processFeedback(self, feedback):
         """Uses the feedback to expand its knowledge base, and then uses that
         base to pare down the possibility space. 
         """
-               
-        log("                Game:                                          " + feedback)
+        # Nasty string concatenation
+        log("                Game:                                          " 
+            + feedback)
 
-        # Do three passes on the feedback, for reasons (outlined below). 
+        # Do three passes on the feedback, for... reasons (outlined below). 
         for i in range(5):
             # "G": Letters we know for sure are most absolute.
             if feedback[i] != 'G':
                 continue
             if self.solvedLetters[i] == ".":
-                # Don't 'solve' the same letter more than once
+                # '.' is a sentinel for an unsolved letter. Don't solve a letter
+                # twice
                 self.solvedLetters[i] = self.choice[i]
                 if self.choice[i] in self.includedLetters:
-                    # We're no longer uncertain about this letter.
+                    # If this was a letter that we were uncertain about in the
+                    # "includedLetters" list, we aren't anymore, so we remove it
                     self.includedLetters.remove(self.choice[i])
 
         for i in range(5):
@@ -217,7 +235,7 @@ class AutoPlayer_MkII:
             if feedback[i] != '_':
                 continue
             # There are some edge cases where you can get a "_" for a letter 
-            # that is in the word if another instance of the letter has been 
+            # that *is* in the word if another instance of the letter has been 
             # matched in another spot. (IE: Guessing SPEED on OTHER matches the
             # first 'E' as an exclusion (___G_), but we obviously can't put 'E' 
             # in the exclusion list!) So add it to the exclusions so long as 
@@ -234,8 +252,10 @@ class AutoPlayer_MkII:
         todo = self.possibilities.copy()
         keep = []
         for testWord in todo:
-            test = True # Assume that the testWord passes. Then look for any
-                        # criterion in our knowledge base that contradicts it. 
+            # Test every word in the list of possible words against the 
+            # knowledge base. Start by assuming it passes, and then iterate over
+            # the things we know to prove by contradiction. 
+            test = True 
             for i in range(5):
                 # If solved letters don't match the test word, the test fails. 
                 test = test and self.solvedLetters[i] in [testWord[i], "."]
@@ -255,9 +275,23 @@ class AutoPlayer_MkII:
     def __str__(self):
         return "AutoPlayer (Mark II)"
 
+def wordleGameLoop(player, game):
+    """ A Generic game loop that takes a player and game object and runs an 
+    entire game of Wordle. It returns a boolean representing if the player won.
+    """
+    while not game.isOver():
+        feedback = None
+        while feedback == None:
+            feedback = game.tryRound(player.playWord())
+        player.processFeedback(feedback)
+    return len(game.rounds) if game.isWon() else 0
+
 def playWordle():
+    """ Runs a game for a human player. Mostly just for funsies/testing that the
+    game logic works :) 
+    """
     # Instantiation
-    loggingEnabled = True
+    loggingEnabled = True   # Humans need logging
     current = Game()
     player = HumanPlayer(current)
     print("Let's Play Wordle!")
@@ -266,13 +300,13 @@ def playWordle():
     else:
         print("You lost... :(  The word was " + current.solution + "!")
 
-def wordleGameLoop(player, game):
-    while not game.isOver():
-        feedback = None
-        while feedback == None:
-            feedback = game.tryRound(player.playWord())
-        player.processFeedback(feedback)
-    return game.isWon()
+def runSim(version):
+    game = Game()
+    player = AutoPlayer_MkI(game) if version == 1 else AutoPlayer_MkII(game) 
+    print(str(player) + " got a score of " + str(wordleGameLoop(player, game)))
+    print("The word was " + game.solution)
 
+
+runSim(1)
+runSim(2)
 playWordle()
-
