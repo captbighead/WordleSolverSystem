@@ -22,9 +22,15 @@ class Game:
             soln_words.append(word[:5])     # Strip the newlines
     
     def __init__(self, soln=None):
-        """Initializes a game by choosing a solution word and creating a list to
-        store round information. If a solution word is provided, that is the 
-        solution, otherwise it picks randomly from the legal solutions list. 
+        """Initializes a game by running it's reset() function. 
+        """
+        self.reset(soln)
+
+    def reset(self, soln=None):
+        """Prepares for a new game by choosing a solution word and overwriting 
+        its list to store round information. If a solution word is provided, 
+        that is the solution, otherwise it picks randomly from the legal 
+        solutions list.
         """
         self.solution = soln if soln else random.choice(self.soln_words)
         self.rounds = []
@@ -144,6 +150,12 @@ class HumanPlayer:
         #if feedback == "GGGGG":    # Checking for wins is done in the game loop
         #    self.butIWonTho = True # but I needed to debug it here. 
 
+    def reset(self, game):
+        """Updates the player object with a reference to the game object so that
+        it may play another game. 
+        """
+        self.game = game
+
     def __str__(self):
         return "Human Player"
 
@@ -165,19 +177,34 @@ class AutoPlayer_MkI:
         log("               Game:                   " + feedback)
         self.ignoreFeedback = True
 
+    def reset(self, game):
+        """Technically, reset() for the MK I updates the internal reference to 
+        the game being played, but since the Mk I doesn't concern itself with 
+        trivial things like "feedback" or "competence", it never really uses it
+        anyways. It just has one because its brothers do. 
+        """
+        self.game = game
+
     def __str__(self):
         return "AutoPlayer (Mark I)"
 
 class AutoPlayer_MkII:
     """Player control logic for a computer that uses the feedback to narrow down
     its random guesses. 
-    Currently set up to only play the game it's given on instantiation; for 
-    later incarnations/simulations I'll need to implement a reset() function.
     """
     def __init__(self, game):
-        """Initialization is used to make a local copy of the game's complete
-        word list and to initialize the knowledge base.
+        """Initialization runs the reset() function on the initial game. 
         """
+        self.reset(game) 
+
+    def reset(self, game):
+        """Sets up the player to play a new game of Wordle, by dumping it's 
+        knowledge base from the previous game, resetting the list of possible 
+        words and updating it's internal references to the new game. This means 
+        it assumes that the game object passed is the new game, which has not 
+        had any rounds played on it yet.
+        """
+        # Initialize references to the game being played. 
         self.game = game
         self.possibilities = self.game.words.copy()
 
@@ -186,7 +213,7 @@ class AutoPlayer_MkII:
         # of the position of, and letters we're certain aren't in the answer
         self.solvedLetters = [".", ".", ".", ".", "."]  # Sentinels to hold posn
         self.includedLetters = []   
-        self.excludedLetters = []   
+        self.excludedLetters = []  
 
     def playWord(self):
         """Grabs a random word from its local list of remaining possible words.
@@ -275,16 +302,32 @@ class AutoPlayer_MkII:
     def __str__(self):
         return "AutoPlayer (Mark II)"
 
+class AutoPlayer_MkIII(AutoPlayer_MkII):
+    """A small improvement (hopefully!) on Mk II, Mk III operates identicaly 
+    except that it uses its first two rounds to play two fixed 'starter' words 
+    that I personally use when I play the game recreationally: 'TENIA' and 
+    'YOURS'. I use those words because they incorporate all vowels (including
+    'Y') and a few of the most common consonants in the english language. 
+    """
+    def playWord(self):
+        if len(self.game.rounds) == 0:
+            return "tenia"
+        elif len(self.game.rounds) == 1:
+            return "yours"
+        else:
+            return super().playWord()
+
 def wordleGameLoop(player, game):
     """ A Generic game loop that takes a player and game object and runs an 
-    entire game of Wordle. It returns a boolean representing if the player won.
+    entire game of Wordle. It returns a score from 6 to 0, where 6 is a game 
+    they won on the first try, and 0 is a game they didn't win. 
     """
     while not game.isOver():
         feedback = None
         while feedback == None:
             feedback = game.tryRound(player.playWord())
         player.processFeedback(feedback)
-    return len(game.rounds) if game.isWon() else 0
+    return 7-len(game.rounds) if game.isWon() else 0
 
 def playWordle():
     """ Runs a game for a human player. Mostly just for funsies/testing that the
@@ -300,13 +343,55 @@ def playWordle():
     else:
         print("You lost... :(  The word was " + current.solution + "!")
 
-def runSim(version):
+def runSimulation(iterations):
+    """ For all AutoPlayer generations in the file, it runs them through a 
+    number of games specified as the iterations argument, tracking their 
+    performance and outputting statistics to the console at the end. 
+    """
     game = Game()
-    player = AutoPlayer_MkI(game) if version == 1 else AutoPlayer_MkII(game) 
-    print(str(player) + " got a score of " + str(wordleGameLoop(player, game)))
-    print("The word was " + game.solution)
+    print()
+    print(" WORDLE SOLVER SIMULATION")
+    print(" ------------------------")
+    print()
+    print(" Each solver plays " + str(iterations) + " games with randomly chose"
+         + "n words from the list of possible Worlde solutions (of which there "
+         + "are " + str(len(game.soln_words)) + ")")
+    print(" Scores range from 0 to 6, based on how many guesses they had remain"
+         + "ing before they made their winning guess. IE: 6 means they got it o"
+         + "n the first try, 1 means they got it on the last guess, and 0 means"
+         + " they didn't get it.)")
+    print()
+    for i in [1,2,3]:
+        if i == 1:
+            player = AutoPlayer_MkI(game) 
+        elif i == 2:
+            player = AutoPlayer_MkII(game) 
+        else:
+           AutoPlayer_MkIII(game)
+        print(" Testing the Mk. " + str(i) + ": ")
+        print(" -------------------------")
+        total_wins = 0
+        best_score = 0
+        avg_score = 0.0
+        for j in range(iterations):
+            score = wordleGameLoop(player, game)
+            game.reset()
+            player.reset(game)
+            total_wins += 1 if score > 0 else 0
+            if score > 0:
+                best_score = score if score > best_score else best_score
+            avg_score += float(score)
+        avg_of_wins = round(avg_score / total_wins,2) if total_wins > 0 else 0.0
+        avg_score /= float(iterations)
+        winrate = round(float(total_wins)/float(iterations)*100, 2)
+        print("         Total Wins: " + str(total_wins))
+        print("       Win Rate (%): " + str(winrate) + "%")
+        print("         Best Score: " + str(best_score))
+        print("         Avg. Score: " + str(round(avg_score,2)))
+        print(" Avg. Score of Wins: " + str(avg_of_wins))
+        print()
+
+runSimulation(10000)
+#playWordle()
 
 
-runSim(1)
-runSim(2)
-playWordle()
