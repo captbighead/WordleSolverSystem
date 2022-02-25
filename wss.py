@@ -47,16 +47,23 @@ class Game:
         """
         return len(self.rounds) > 0 and self.rounds[-1][0] == self.solution
 
-    def checkWordIsLegal(self, word):
+    def checkWordIsLegal(self, word, player):
         """Check that the word is a legal guess in Wordle (a five letter word in
-       the game's dictionary)
-       """
-        for legal in self.words:
-            if word == legal:
-                return True
-        return False
+        the game's dictionary).
 
-    def tryRound(self, word):
+        This is only necessary if the Player Class can input something that 
+        isn't in the word list; if they're a Human, for instance. The logic can
+        be revisited if classes are ever created that can guess illegal words, 
+        but for now if the player is not an instance of the HumanPlayer class
+        we can short circuit this check, as I'm sure it's not helping 
+        performance.  
+        """
+        if isinstance(player, HumanPlayer):
+            return word in self.words
+        else:
+            return True
+
+    def tryRound(self, word, player):
         """Attempts to play a word in the game. If the word is legal and the
         game isn't already finished (win or lose) then it returns the feedback
         for that word as the game Wordle would:
@@ -70,9 +77,12 @@ class Game:
 
         It's possible (esp. with an impatient human) that the words played are 
         not valid guesses. In that case, the feedback is null and the Player is
-        expected to process that and try again. 
+        expected to process that and try again. The method takes the player 
+        trying to play the word in as an argument, so that the nested methods
+        can check if they're a human. Otherwise the 'legal' check just short 
+        circuits, because robots are infallible. 
         """
-        if self.checkWordIsLegal(word) and not self.isOver():
+        if self.checkWordIsLegal(word, player) and not self.isOver():
             return self.matchWord(word)
         return None
 
@@ -206,7 +216,22 @@ class AutoPlayer_MkII:
         """
         # Initialize references to the game being played. 
         self.game = game
-        self.possibilities = self.game.words.copy()
+
+        # Choosing the appropriate one of the next two lines is a bit of a 
+        # matter of prefrerence. In truth, the results are probably more 
+        # realistic if you use only the words from the solution list, because 
+        # most of the words not in that list are bizarre and not choices a human
+        # would make. 
+        #
+        # On the other hand, it kind of feels like cheating! It's so small that
+        # performance goes way up as the possibilities it needs to weed out go
+        # way down, and every guess it makes is the solution to *some* puzzle. 
+        #
+        # But it's also *much* faster...
+        #
+        # Whichever line is uncommented is based on the mood I'm in :) 
+        #self.possibilities = self.game.words.copy()
+        self.possibilities = self.game.soln_words.copy()
 
         # Set up the knowledge base of letters in the final answer that we're 
         # certain about the position of, letters in the answer we're uncertain
@@ -214,6 +239,8 @@ class AutoPlayer_MkII:
         self.solvedLetters = [".", ".", ".", ".", "."]  # Sentinels to hold posn
         self.includedLetters = []   
         self.excludedLetters = []  
+        self.targetedExclusions = []    # (Letter, index) tuples we know are 
+                                        # wrong
 
     def playWord(self):
         """Grabs a random word from its local list of remaining possible words.
@@ -256,6 +283,10 @@ class AutoPlayer_MkII:
                 # I'm hesitant to make this restriction... there are edge cases,
                 # but I'm breaking my brain trying to deal with them.
                 self.includedLetters.append(self.choice[i])
+            if (self.choice[i], i) not in self.targetedExclusions:
+                # We know it's included, but not at *this* index. That narrows 
+                # the search
+                self.targetedExclusions.append((self.choice[i], i))
 
         for i in range(5):
             # "_": Letters we know are excluded.
@@ -283,16 +314,32 @@ class AutoPlayer_MkII:
             # knowledge base. Start by assuming it passes, and then iterate over
             # the things we know to prove by contradiction. 
             test = True 
-            for i in range(5):
+            i = 0
+            while test and i < 5:
                 # If solved letters don't match the test word, the test fails. 
                 test = test and self.solvedLetters[i] in [testWord[i], "."]
-            for incl in self.includedLetters:
+                i += 1
+            i = 0
+            while test and i < len(self.includedLetters):
                 # If the test word doesn't have a letter that's in the include 
                 # list, the test fails. 
+                incl = self.includedLetters[i]
                 test = test and testWord.find(incl) != -1
-            for excl in self.excludedLetters:
+                i += 1
+            i = 0
+            while test and i < len(self.excludedLetters):
                 # ^Ditto, but opposite. 
+                excl = self.excludedLetters[i]
                 test = test and testWord.find(excl) == -1
+                i += 1
+            i = 0
+            while test and i < len(self.targetedExclusions):
+                # Lastly, while it may have the letter from the include list, if
+                # the letter's in a spot we know is wrong, we can eliminate it
+                tup = self.targetedExclusions[i]
+                if testWord.find(tup[0]) == tup[1]:
+                    test = False
+                i += 1
             if test:
                 keep.append(testWord)
         self.possibilities = keep
@@ -311,9 +358,11 @@ class AutoPlayer_MkIII(AutoPlayer_MkII):
     """
     def playWord(self):
         if len(self.game.rounds) == 0:
-            return "tenia"
+            self.choice = "tenia"
+            return self.choice
         elif len(self.game.rounds) == 1:
-            return "yours"
+            self.choice = "yours"
+            return self.choice
         else:
             return super().playWord()
 
@@ -325,7 +374,7 @@ def wordleGameLoop(player, game):
     while not game.isOver():
         feedback = None
         while feedback == None:
-            feedback = game.tryRound(player.playWord())
+            feedback = game.tryRound(player.playWord(), player)
         player.processFeedback(feedback)
     return 7-len(game.rounds) if game.isWon() else 0
 
@@ -361,19 +410,31 @@ def runSimulation(iterations):
          + "n the first try, 1 means they got it on the last guess, and 0 means"
          + " they didn't get it.)")
     print()
+
+    # Progress bars... those are a cool trick!
+    progressChunk = int(iterations/10)
+    
     for i in [1,2,3]:
+    #for i in [3]:
         if i == 1:
             player = AutoPlayer_MkI(game) 
         elif i == 2:
             player = AutoPlayer_MkII(game) 
         else:
-           AutoPlayer_MkIII(game)
+            player = AutoPlayer_MkIII(game)
         print(" Testing the Mk. " + str(i) + ": ")
-        print(" -------------------------")
+        print(" ---------------------------")
+        print(" PROG.: ", end="", flush=True)
         total_wins = 0
         best_score = 0
         avg_score = 0.0
         for j in range(iterations):
+
+            # Progress update:
+            if j % progressChunk == progressChunk - 1:
+                print(" X", end="", flush=True)
+
+
             score = wordleGameLoop(player, game)
             game.reset()
             player.reset(game)
@@ -381,6 +442,7 @@ def runSimulation(iterations):
             if score > 0:
                 best_score = score if score > best_score else best_score
             avg_score += float(score)
+        print()
         avg_of_wins = round(avg_score / total_wins,2) if total_wins > 0 else 0.0
         avg_score /= float(iterations)
         winrate = round(float(total_wins)/float(iterations)*100, 2)
@@ -391,7 +453,7 @@ def runSimulation(iterations):
         print(" Avg. Score of Wins: " + str(avg_of_wins))
         print()
 
-runSimulation(10000)
+runSimulation(100)
 #playWordle()
 
 
