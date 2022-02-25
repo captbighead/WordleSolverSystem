@@ -2,6 +2,16 @@ import io
 import random
 
 loggingEnabled = False
+"""Some AutoPlayers print more out to the console for the program user to follow 
+their logic, but this is mostly for debugging. 
+"""
+useSolns = False    
+"""If True, solvers will use the list of actual solution words to do any 
+decision making. This increases their effectiveness by vastly limiting the 
+possibility space. While this is more in line with the fuzzy concept of "words a
+person would actually guess", it is perhaps an overcorrection, as a layperson
+wouldn't have access such a tight dictionary. 
+"""
 
 def log(message):
     if loggingEnabled:
@@ -32,6 +42,20 @@ class Game:
         that is the solution, otherwise it picks randomly from the legal 
         solutions list.
         """
+        if loggingEnabled:
+            try:
+                if self.solution != None:
+                    print("---")
+                    print("SOLN: " + self.solution)
+                    guessln = ""
+                    fdbckln = ""
+                    for round in self.rounds:
+                        guessln += round[0] + " "
+                        fdbckln += round[1] + " "
+                print(guessln)
+                print(fdbckln)
+            except:
+                itsfinejustkeepgoing = True
         self.solution = soln if soln else random.choice(self.soln_words)
         self.rounds = []
 
@@ -205,7 +229,7 @@ class AutoPlayer_MkII:
     def __init__(self, game):
         """Initialization runs the reset() function on the initial game. 
         """
-        self.reset(game) 
+        self.__reset(game) 
 
     def reset(self, game):
         """Sets up the player to play a new game of Wordle, by dumping it's 
@@ -216,22 +240,8 @@ class AutoPlayer_MkII:
         """
         # Initialize references to the game being played. 
         self.game = game
-
-        # Choosing the appropriate one of the next two lines is a bit of a 
-        # matter of prefrerence. In truth, the results are probably more 
-        # realistic if you use only the words from the solution list, because 
-        # most of the words not in that list are bizarre and not choices a human
-        # would make. 
-        #
-        # On the other hand, it kind of feels like cheating! It's so small that
-        # performance goes way up as the possibilities it needs to weed out go
-        # way down, and every guess it makes is the solution to *some* puzzle. 
-        #
-        # But it's also *much* faster...
-        #
-        # Whichever line is uncommented is based on the mood I'm in :) 
-        #self.possibilities = self.game.words.copy()
-        self.possibilities = self.game.soln_words.copy()
+        self.possibilities = self.game.soln_words.copy() if useSolns else \
+            self.game.words.copy()
 
         # Set up the knowledge base of letters in the final answer that we're 
         # certain about the position of, letters in the answer we're uncertain
@@ -241,6 +251,8 @@ class AutoPlayer_MkII:
         self.excludedLetters = []  
         self.targetedExclusions = []    # (Letter, index) tuples we know are 
                                         # wrong
+
+    __reset = reset
 
     def playWord(self):
         """Grabs a random word from its local list of remaining possible words.
@@ -260,6 +272,16 @@ class AutoPlayer_MkII:
         # Nasty string concatenation
         log("                Game:                                          " 
             + feedback)
+
+        # We won! No need to iterate again :)
+        if feedback == "GGGGG":
+            return
+
+        # Remove the last choice from consideration!
+        try:
+            self.possibilities.remove(self.choice)
+        except(ValueError):
+            removeShouldntThrowExceptionsIfItsAlreadyGoneGeez = True
 
         # Do three passes on the feedback, for... reasons (outlined below). 
         for i in range(5):
@@ -349,22 +371,127 @@ class AutoPlayer_MkII:
     def __str__(self):
         return "AutoPlayer (Mark II)"
 
+
 class AutoPlayer_MkIII(AutoPlayer_MkII):
     """A small improvement (hopefully!) on Mk II, Mk III operates identicaly 
-    except that it uses its first two rounds to play two fixed 'starter' words 
-    that I personally use when I play the game recreationally: 'TENIA' and 
-    'YOURS'. I use those words because they incorporate all vowels (including
-    'Y') and a few of the most common consonants in the english language. 
+    except that it uses its first two rounds to play two fixed 'starter' words.
+    The words used to be my personal starters for when i played recreationally: 
+    'TENIA' and 'YOURS', but after starting development on the Mk IV I learned 
+    which ten words had the highest total frequency in the solution dictionary.
+    Compiling two five-letter words from the ten most common letters among legal
+    solutions, I picked new starters: 'CARET' and 'LOINS'.
     """
     def playWord(self):
+        """Identical to the Mk. II implementation, save for the fact that it 
+        guesses 'caret' and 'loins' as the guesses in the first two rounds no 
+        matter what. 
+        """
         if len(self.game.rounds) == 0:
-            self.choice = "tenia"
+            self.choice = "caret"
             return self.choice
         elif len(self.game.rounds) == 1:
-            self.choice = "yours"
+            self.choice = "loins"
             return self.choice
         else:
             return super().playWord()
+
+class AutoPlayer_MkIV(AutoPlayer_MkII):
+    """Player control logic for a computer that analyzes word dictionaries to 
+    make deliberate, educated guesses. 
+    """
+    def __init__(self, game):
+        """In addition to the initialization steps taken by the MkII, the MkIV
+        looks at the solution dictionary and scores words by how much they share
+        in common with other possible solution words. 
+        """
+        super().__init__(game)
+        self.scorePossibilities()
+
+    def playWord(self):
+        """Grabs the word that the processFeedback() method has determined to be
+        the most effective choice.
+        """
+        self.choice = self.possibilities[0]
+        return self.choice
+
+    def processFeedback(self, feedback):
+        """Expanding upon the processFeedback() implementation of Mk II, the 
+        possibilities list is sorted by the word's similarity to the rest of the
+        words in the dictionary, such that the word with the most in common with
+        all of the other original possibilities is the first in the list. 
+        """
+        super().processFeedback(feedback)
+        self.scorePossibilities()
+
+    def scorePossibilities(self):
+        """Goes through the list of all possibilities and re-evaluates their 
+        scores based on the frequency of letters in positions among words in 
+        that list. 
+        """
+        lft = {}   
+        # 'Letter Frequency Tracking'. Dictionary mapping letters to a 
+        # dictionary mapping indices to a list containing their frequency in the
+        # possibilities list.
+        # lft[letter][index] = num_in_list
+        for word in self.possibilities:
+            for i in range(5):
+                letter_indices = lft.get(word[i], {})
+                letter_indices[i] = letter_indices.get(i, 0)
+                letter_indices[i] += 1
+                lft[word[i]] = letter_indices
+        
+        ## Outputs Findings as CSV text to the console.
+        ## Mapping has since been updated, so it won't work, but because I'm 
+        ## updating it I might need to revisit a debugging solution. 
+        #if loggingEnabled:
+        #    for letter in lft.keys():
+        #        letter_all = 0
+        #        letter_soln = 0
+        #        for index in lft[letter].keys():
+        #            letter_all += lft[letter][index][0]
+        #            letter_soln += lft[letter][index][1]
+        #        print(letter + ", " + str(letter_all) + ", " + str(letter_soln))
+        #    for letter in lft.keys():
+        #        for index in lft[letter].keys():
+        #            print(letter + ", " + str(index)  + ", " + 
+        #                    str(lft[letter][index][0]) + ", " + 
+        #                    str(lft[letter][index][1]))
+
+        # We can score words by how 'common' they are. For now we'll use a 
+        # really simple scoring method that just iterates over the letters in a
+        # word, and adds the number of words in the solutions dictionary that 
+        # have that letter in that position to the score. 
+        self.word_scores = {}
+        candidates = self.possibilities
+        for word in candidates:
+            score = 0
+            for i in range(5):
+                score += lft[word[i]][i]
+            self.word_scores[word] = score
+
+        # Now that we've ranked all the words, we can sort the possibility space
+        # created in the superclass's __init__() by those scores. 
+        self.sortPossibilities()
+
+    def reset(self, game):
+        """Identical to the Mk II implementation, except it sorts the 
+        possibilities space by their scores after it's finished.
+        """
+        super().reset(game)
+        self.scorePossibilities()
+        self.sortPossibilities()
+
+    def sortPossibilities(self):
+        """Sorts the possibilities list by the possibilityScore() method.
+        """
+        self.possibilities.sort(reverse=True, key=self.possibilityScore)
+
+    def possibilityScore(self, word):
+        """Returns the commonality score for a given word. Used to sort the 
+        possibility space.
+        """
+        return self.word_scores[word]
+        
 
 def wordleGameLoop(player, game):
     """ A Generic game loop that takes a player and game object and runs an 
@@ -392,7 +519,7 @@ def playWordle():
     else:
         print("You lost... :(  The word was " + current.solution + "!")
 
-def runSimulation(iterations):
+def runSimulation(iterations, models):
     """ For all AutoPlayer generations in the file, it runs them through a 
     number of games specified as the iterations argument, tracking their 
     performance and outputting statistics to the console at the end. 
@@ -414,14 +541,15 @@ def runSimulation(iterations):
     # Progress bars... those are a cool trick!
     progressChunk = int(iterations/10)
     
-    for i in [1,2,3]:
-    #for i in [3]:
+    for i in models:
         if i == 1:
             player = AutoPlayer_MkI(game) 
         elif i == 2:
-            player = AutoPlayer_MkII(game) 
-        else:
+            player = AutoPlayer_MkII(game)
+        elif i == 3:
             player = AutoPlayer_MkIII(game)
+        elif i == 4:
+            player = AutoPlayer_MkIV(game)
         print(" Testing the Mk. " + str(i) + ": ")
         print(" ---------------------------")
         print(" PROG.: ", end="", flush=True)
@@ -430,7 +558,7 @@ def runSimulation(iterations):
         avg_score = 0.0
         for j in range(iterations):
 
-            # Progress update:
+            #Progress update:
             if j % progressChunk == progressChunk - 1:
                 print(" X", end="", flush=True)
 
@@ -453,7 +581,9 @@ def runSimulation(iterations):
         print(" Avg. Score of Wins: " + str(avg_of_wins))
         print()
 
-runSimulation(100)
+
+         
+
+#player = AutoPlayer_MkIV()
+runSimulation(100, [1,2,3,4])
 #playWordle()
-
-
